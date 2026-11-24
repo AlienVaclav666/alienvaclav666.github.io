@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BOSS RC600 MIDI CC -> NOTE</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background: #121212;
+            color: #e0e0e0;
+        }
+        h1, h2, h3 { color: #fff; margin-top: 0; }
+        .status {
+            padding: 10px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+            background: #222;
+            border-left: 5px solid #ff9800;
+        }
+        .status.connected { border-left-color: #4caf50; }
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+        #mappingMatrix {
+            grid-template-columns: 1fr;
+        }
+        .card {
+            background: #1e1e1e;
+            padding: 15px;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+        }
+        #mappingMatrix .card {
+            display: grid;
+            grid-template-columns: 110px 120px 150px minmax(180px, 1fr) minmax(220px, 1fr) minmax(220px, 1fr);
+            column-gap: 12px;
+            row-gap: 8px;
+            align-items: end;
+        }
+        #mappingMatrix .card h3 {
+            align-self: center;
+            margin: 0;
+        }
+        #mappingMatrix .flex-group {
+            display: contents;
+        }
+        #mappingMatrix .flex-group > div,
+        #mappingMatrix [id^="row-"] {
+            min-width: 0;
+        }
+        .global-settings {
+            background: #252525;
+            border: 1px solid #333;
+        }
+        label { display: block; margin-top: 10px; font-size: 0.85em; color: #aaa; }
+        .inline-label { display: inline-flex; align-items: center; gap: 5px; margin-top: 10px; font-size: 0.85em; color: #aaa; }
+        .inline-label input { width: auto; margin: 0; }
+        select, input {
+            width: 100%;
+            padding: 8px;
+            margin-top: 4px;
+            background: #333;
+            color: #fff;
+            border: 1px solid #555;
+            border-radius: 4px;
+            box-sizing: border-box;
+        }
+        .log-box {
+            background: #000;
+            padding: 15px;
+            border-radius: 5px;
+            height: 180px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 0.85em;
+            color: #00ff00;
+        }
+        .flex-group { display: flex; gap: 10px; }
+        .flex-group > div { flex: 1; }
+
+        @media (max-width: 900px) {
+            #mappingMatrix .card {
+                grid-template-columns: 1fr;
+            }
+            #mappingMatrix .card h3 {
+                margin-bottom: 5px;
+            }
+        }
+    </style>
+</head>
+<body>
+
+    <h1>BOSS RC600 MIDI CC -> NOTE</h1>
+    
+    <div id="status" class="status">Inicjalizacja Web MIDI API...</div>
+
+    <div class="grid">
+        <div class="card">
+            <h2>Połączenia</h2>
+            <label for="midiIn">Wejście (Z urządzenia USB):</label>
+            <select id="midiIn"><option value="">Wybierz urządzenie...</option></select>
+
+            <label for="midiOut">Wyjście (Do syntezatora/aplikacji):</label>
+            <select id="midiOut"><option value="">Wybierz urządzenie...</option></select>
+        </div>
+
+        <div class="card global-settings">
+            <h2>Ustawienia Globalne</h2>
+            <label for="globalDuration">Domyślny czas trwania nuty (ms):</label>
+            <input type="number" id="globalDuration" min="1" max="10000" value="500">
+            <small style="color: #777; font-size: 0.8em;">Używany, gdy reguła nie ma zaznaczonego "Per mapping"</small>
+            <label for="globalVolume">Domyślna głośność nuty (0–127):</label>
+            <input type="number" id="globalVolume" min="0" max="127" value="100">
+            <small style="color: #777; font-size: 0.8em;">Używana, gdy reguła nie ma zaznaczonego "Per mapping"; każda nuta zostanie losowo zmieniona ±3</small>
+        </div>
+    </div>
+
+    <h2>Matryca mapowania (10 reguł)</h2>
+    <div id="mappingMatrix" class="grid">
+        <!-- Reguły generowane przez JS -->
+    </div>
+
+    <h2>Podgląd komunikatów (Log)</h2>
+    <div id="log" class="log-box"></div>
+
+    <script>
+        let midiAccess = null;
+        let activeInput = null;
+        let activeOutput = null;
+        const totalRules = 10;
+        const noteNames = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+
+        function getNoteSelectOptions() {
+            return Array.from({ length: 128 }, (_, i) =>
+                `<option value="${i}">${noteNames[i % 12]}${Math.floor(i / 12) - 1} (MIDI ${i})</option>`
+            ).join("");
+        }
+        const templateSettings = {
+            globalDuration: 500,
+            globalVolume: 100,
+            rules: [
+                { inCC: 1, outType: "NOTE", outNote: 38, outCC: 0, customDuration: false, outDuration: 300, customVolume: false, outVolume: 100 },
+                { inCC: 5, outType: "NOTE", outNote: 38, outCC: 0, customDuration: false, outDuration: 300, customVolume: false, outVolume: 100 },
+                { inCC: 6, outType: "NOTE", outNote: 41, outCC: 0, customDuration: false, outDuration: 300, customVolume: false, outVolume: 120 },
+                { inCC: 8, outType: "NOTE", outNote: 69, outCC: 0, customDuration: false, outDuration: 300, customVolume: false, outVolume: 100 },
+                { inCC: 0, outType: "NOTE", outNote: 0, outCC: 0, customDuration: false, outDuration: 300, customVolume: false, outVolume: 100 },
+                { inCC: 0, outType: "NOTE", outNote: 0, outCC: 0, customDuration: false, outDuration: 300, customVolume: false, outVolume: 100 },
+                { inCC: 0, outType: "NOTE", outNote: 0, outCC: 0, customDuration: false, outDuration: 300, customVolume: false, outVolume: 100 },
+                { inCC: 0, outType: "NOTE", outNote: 0, outCC: 0, customDuration: false, outDuration: 300, customVolume: false, outVolume: 100 },
+                { inCC: 0, outType: "NOTE", outNote: 0, outCC: 0, customDuration: false, outDuration: 300, customVolume: false, outVolume: 100 },
+                { inCC: 0, outType: "NOTE", outNote: 0, outCC: 0, customDuration: false, outDuration: 300, customVolume: false, outVolume: 100 }
+            ]
+        };
+
+        const statusDiv = document.getElementById('status');
+        const midiInSelect = document.getElementById('midiIn');
+        const midiOutSelect = document.getElementById('midiOut');
+        const matrixContainer = document.getElementById('mappingMatrix');
+        const logBox = document.getElementById('log');
+        const el = id => document.getElementById(id);
+
+        const noteOptionsHTML = getNoteSelectOptions();
+        el('globalDuration').value = templateSettings.globalDuration;
+        el('globalVolume').value = templateSettings.globalVolume;
+
+        for (let i = 0; i < totalRules; i++) {
+            const rule = templateSettings.rules[i] || {};
+            matrixContainer.innerHTML += `
+                <div class="card" id="rule-card-${i}">
+                    <h3>Reguła ${i + 1}</h3>
+                    <div class="flex-group">
+                        <div>
+                            <label>Wejściowy CC#:</label>
+                            <input type="number" id="inCC-${i}" min="0" max="127" value="${rule.inCC ?? i}">
+                        </div>
+                        <div>
+                            <label>Typ wyjścia:</label>
+                            <select id="outType-${i}" onchange="updateRuleUI(${i})">
+                                <option value="NOTE" ${rule.outType === "NOTE" ? 'selected' : ''}>Nuta (Note ON/OFF)</option>
+                                <option value="CC" ${rule.outType === "CC" ? 'selected' : ''}>Inny CC</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div id="row-note-${i}">
+                        <label>Wyjściowa Nuta:</label>
+                        <select id="outNote-${i}">${noteOptionsHTML}</select>
+                    </div>
+
+                    <div id="row-cc-${i}" style="display: none;">
+                        <label>Wyjściowy CC#:</label>
+                        <input type="number" id="outCC-${i}" min="0" max="127" value="${rule.outCC ?? i + 10}">
+                    </div>
+
+                    <div id="row-duration-${i}">
+                        <div class="inline-label">
+                            <input type="checkbox" id="customDurCheck-${i}" onchange="updateRuleUI(${i})" ${rule.customDuration ? 'checked' : ''}>
+                            <label for="customDurCheck-${i}" style="margin:0;">Czas per mapping (ms):</label>
+                        </div>
+                        <input type="number" id="outDuration-${i}" min="1" max="10000" value="${rule.outDuration ?? 300}" ${rule.customDuration ? '' : 'disabled'}>
+                    </div>
+
+                    <div id="row-volume-${i}">
+                        <div class="inline-label">
+                            <input type="checkbox" id="customVolumeCheck-${i}" onchange="updateRuleUI(${i})" ${rule.customVolume ? 'checked' : ''}>
+                            <label for="customVolumeCheck-${i}" style="margin:0;">Głośność per mapping (0–127):</label>
+                        </div>
+                        <input type="number" id="outVolume-${i}" min="0" max="127" value="${rule.outVolume ?? 100}" ${rule.customVolume ? '' : 'disabled'}>
+                    </div>
+                </div>
+            `;
+            el(`outNote-${i}`).value = rule.outNote ?? (i === 0 ? 57 : i === 1 ? 71 : 60);
+        }
+        function updateRuleUI(i) {
+            const isNote = el(`outType-${i}`).value === "NOTE";
+            el(`row-note-${i}`).style.display = isNote ? "block" : "none";
+            el(`row-cc-${i}`).style.display = isNote ? "none" : "block";
+            el(`row-duration-${i}`).style.display = isNote ? "block" : "none";
+            el(`row-volume-${i}`).style.display = isNote ? "block" : "none";
+            el(`outDuration-${i}`).disabled = !el(`customDurCheck-${i}`).checked;
+            el(`outVolume-${i}`).disabled = !el(`customVolumeCheck-${i}`).checked;
+        }
+
+        for (let i = 0; i < totalRules; i++) { updateRuleUI(i); }
+
+        function randomizeNoteVelocity(volume) {
+            const variation = Math.floor(Math.random() * 7) - 3;
+            return Math.max(0, Math.min(127, volume + variation));
+        }
+
+        function log(message) {
+            const time = new Date().toLocaleTimeString();
+            logBox.innerHTML = `[${time}] ${message}<br>` + logBox.innerHTML;
+        }
+        if (navigator.requestMIDIAccess) {
+            navigator.requestMIDIAccess({ sysex: false }).then(onMIDISuccess, onMIDIFailure);
+        } else {
+            statusDiv.innerText = "Błąd: Brak wsparka Web MIDI API w tej przeglądarce.";
+        }
+
+        function onMIDISuccess(midi) {
+            midiAccess = midi;
+            statusDiv.innerText = "Web MIDI API gotowe. Podłącz kontroler USB.";
+            statusDiv.classList.add('connected');
+            updateDevices();
+            midiAccess.onstatechange = updateDevices;
+        }
+
+        function onMIDIFailure(msg) { statusDiv.innerText = "Błąd MIDI: " + msg; }
+
+        function updateDevices() {
+            const inputs = midiAccess.inputs.values();
+            const outputs = midiAccess.outputs.values();
+            midiInSelect.innerHTML = '<option value="">Wybierz wejście...</option>';
+            midiOutSelect.innerHTML = '<option value="">Wybierz wyjście...</option>';
+            for (const input of inputs) midiInSelect.innerHTML += `<option value="${input.id}">${input.name}</option>`;
+            for (const output of outputs) midiOutSelect.innerHTML += `<option value="${output.id}">${output.name}</option>`;
+        }
+
+        midiInSelect.addEventListener('change', (e) => {
+            if (activeInput) activeInput.onmidimessage = null;
+            activeInput = midiAccess.inputs.get(e.target.value);
+            if (activeInput) {
+                activeInput.onmidimessage = handleMIDIMessage;
+                log(`Wejście: ${activeInput.name}`);
+            }
+        });
+
+        midiOutSelect.addEventListener('change', (e) => {
+            activeOutput = midiAccess.outputs.get(e.target.value);
+            if (activeOutput) log(`Wyjście: ${activeOutput.name}`);
+        });
+        function handleMIDIMessage(event) {
+            const data = event.data;
+            const cmd = data[0] & 0xf0;
+            const channel = data[0] & 0x0f;
+
+            if (cmd === 0xB0) {
+                const ccNumber = data[1];
+                const ccValue = data[2];
+
+                log(`📥 CC ${ccNumber} | Wartość: ${ccValue}`);
+                for (let i = 0; i < totalRules; i++) {
+                    const targetInCC = parseInt(el(`inCC-${i}`).value);
+                    if (ccNumber === targetInCC) {
+                        const outType = el(`outType-${i}`).value;
+                        if (!activeOutput) return;
+
+                        if (outType === "CC") {
+                            const outCCNumber = parseInt(el(`outCC-${i}`).value);
+                            activeOutput.send([0xB0 | channel, outCCNumber, ccValue]);
+                            log(`👉 Wyjście CC: ${outCCNumber} | Wartość: ${ccValue}`);
+                        } else if (outType === "NOTE") {
+                            if (ccValue > 0) {
+                                const noteNumber = parseInt(el(`outNote-${i}`).value);
+                                const isCustomDur = el(`customDurCheck-${i}`).checked;
+                                const duration = isCustomDur
+                                    ? parseInt(el(`outDuration-${i}`).value)
+                                    : parseInt(el('globalDuration').value);
+                                const isCustomVolume = el(`customVolumeCheck-${i}`).checked;
+                                const volumeValue = isCustomVolume
+                                    ? parseInt(el(`outVolume-${i}`).value)
+                                    : parseInt(el('globalVolume').value);
+                                const baseVelocity = Math.max(0, Math.min(127, Number.isFinite(volumeValue) ? volumeValue : 100));
+                                const velocity = randomizeNoteVelocity(baseVelocity);
+
+                                if (velocity === 0) {
+                                    log(`🔇 Nuta ${noteNumber} pominięta (głośność: 0)`);
+                                    return;
+                                }
+
+                                activeOutput.send([0x90 | channel, noteNumber, velocity]);
+                                log(`🎵 NOTE ON: ${noteNumber} (CC: ${ccValue}, Vel: ${velocity}) [Czas: ${duration}ms]`);
+
+                                setTimeout(() => {
+                                    if (activeOutput) {
+                                        activeOutput.send([0x80 | channel, noteNumber, 0]);
+                                        log(`🔇 NOTE OFF: ${noteNumber}`);
+                                    }
+                                }, duration);
+                            }
+                        }
+                        return;
+                    }
+                }
+            }
+            if (activeOutput) {
+                activeOutput.send(data);
+            }
+        }
+    </script>
+</body>
+</html>
