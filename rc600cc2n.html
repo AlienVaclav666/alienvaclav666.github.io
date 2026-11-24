@@ -113,10 +113,10 @@
             <h2>Ustawienia Globalne</h2>
             <label for="globalDuration">Domyślny czas trwania nuty (ms):</label>
             <input type="number" id="globalDuration" min="1" max="10000" value="500">
-            <small style="color: #777; font-size: 0.8em;">Używany, gdy reguła nie ma zaznaczonego "Per mapping"</small>
+            <small style="color: #777; font-size: 0.8em;">Używany, gdy czas trwania reguły jest pusty</small>
             <label for="globalVolume">Domyślna głośność nuty (0–127):</label>
             <input type="number" id="globalVolume" min="0" max="127" value="100">
-            <small style="color: #777; font-size: 0.8em;">Używana, gdy reguła nie ma zaznaczonego "Per mapping"; każda nuta zostanie losowo zmieniona ±3</small>
+            <small style="color: #777; font-size: 0.8em;">Używana, gdy głośność reguły jest pusta; każda nuta zostanie losowo zmieniona ±3</small>
         </div>
     </div>
 
@@ -141,7 +141,7 @@
             ).join("");
         }
         const templateSettings = {
-            globalDuration: 500,
+            globalDuration: 300,
             globalVolume: 100,
             rules: [
                 { inCC: 1, outType: "NOTE", outNote: 38, outCC: 0, customDuration: false, outDuration: 300, customVolume: false, outVolume: 100 },
@@ -170,7 +170,7 @@
 
         for (let i = 0; i < totalRules; i++) {
             const rule = templateSettings.rules[i] || {};
-            matrixContainer.innerHTML += `
+            matrixContainer.insertAdjacentHTML('beforeend', `
                 <div class="card" id="rule-card-${i}">
                     <h3>Reguła ${i + 1}</h3>
                     <div class="flex-group">
@@ -198,22 +198,16 @@
                     </div>
 
                     <div id="row-duration-${i}">
-                        <div class="inline-label">
-                            <input type="checkbox" id="customDurCheck-${i}" onchange="updateRuleUI(${i})" ${rule.customDuration ? 'checked' : ''}>
-                            <label for="customDurCheck-${i}" style="margin:0;">Czas per mapping (ms):</label>
-                        </div>
-                        <input type="number" id="outDuration-${i}" min="1" max="10000" value="${rule.outDuration ?? 300}" ${rule.customDuration ? '' : 'disabled'}>
+                        <label for="outDuration-${i}">Czas trwania nuty (ms):</label>
+                        <input type="number" id="outDuration-${i}" min="1" max="10000" value="" placeholder="Domyślny">
                     </div>
 
                     <div id="row-volume-${i}">
-                        <div class="inline-label">
-                            <input type="checkbox" id="customVolumeCheck-${i}" onchange="updateRuleUI(${i})" ${rule.customVolume ? 'checked' : ''}>
-                            <label for="customVolumeCheck-${i}" style="margin:0;">Głośność per mapping (0–127):</label>
-                        </div>
-                        <input type="number" id="outVolume-${i}" min="0" max="127" value="${rule.outVolume ?? 100}" ${rule.customVolume ? '' : 'disabled'}>
+                        <label for="outVolume-${i}">Głośność nuty (0–127):</label>
+                        <input type="number" id="outVolume-${i}" min="0" max="127" value="" placeholder="Domyślna">
                     </div>
                 </div>
-            `;
+            `);
             el(`outNote-${i}`).value = rule.outNote ?? (i === 0 ? 57 : i === 1 ? 71 : 60);
         }
         function updateRuleUI(i) {
@@ -222,14 +216,12 @@
             el(`row-cc-${i}`).style.display = isNote ? "none" : "block";
             el(`row-duration-${i}`).style.display = isNote ? "block" : "none";
             el(`row-volume-${i}`).style.display = isNote ? "block" : "none";
-            el(`outDuration-${i}`).disabled = !el(`customDurCheck-${i}`).checked;
-            el(`outVolume-${i}`).disabled = !el(`customVolumeCheck-${i}`).checked;
         }
 
         for (let i = 0; i < totalRules; i++) { updateRuleUI(i); }
 
         function randomizeNoteVelocity(volume) {
-            const variation = Math.floor(Math.random() * 7) - 3;
+            const variation = Math.floor(Math.random() * 7) - 10;
             return Math.max(0, Math.min(127, volume + variation));
         }
 
@@ -254,12 +246,30 @@
         function onMIDIFailure(msg) { statusDiv.innerText = "Błąd MIDI: " + msg; }
 
         function updateDevices() {
-            const inputs = midiAccess.inputs.values();
-            const outputs = midiAccess.outputs.values();
+            const selectedInputId = midiInSelect.value || (activeInput && activeInput.id) || "";
+            const selectedOutputId = midiOutSelect.value || (activeOutput && activeOutput.id) || "";
             midiInSelect.innerHTML = '<option value="">Wybierz wejście...</option>';
             midiOutSelect.innerHTML = '<option value="">Wybierz wyjście...</option>';
-            for (const input of inputs) midiInSelect.innerHTML += `<option value="${input.id}">${input.name}</option>`;
-            for (const output of outputs) midiOutSelect.innerHTML += `<option value="${output.id}">${output.name}</option>`;
+            for (const input of midiAccess.inputs.values()) {
+                midiInSelect.innerHTML += `<option value="${input.id}">${input.name}</option>`;
+            }
+            for (const output of midiAccess.outputs.values()) {
+                midiOutSelect.innerHTML += `<option value="${output.id}">${output.name}</option>`;
+            }
+
+            const input = midiAccess.inputs.get(selectedInputId);
+            if (input) {
+                midiInSelect.value = input.id;
+                if (activeInput && activeInput !== input) activeInput.onmidimessage = null;
+                activeInput = input;
+                activeInput.onmidimessage = handleMIDIMessage;
+            } else {
+                if (activeInput) activeInput.onmidimessage = null;
+                activeInput = null;
+            }
+
+            activeOutput = midiAccess.outputs.get(selectedOutputId) || null;
+            if (activeOutput) midiOutSelect.value = activeOutput.id;
         }
 
         midiInSelect.addEventListener('change', (e) => {
@@ -268,6 +278,27 @@
             if (activeInput) {
                 activeInput.onmidimessage = handleMIDIMessage;
                 log(`Wejście: ${activeInput.name}`);
+
+                const outputs = Array.from(midiAccess.outputs.values());
+                const matchingOutput = outputs.find(output => output.id === activeInput.id)
+                    || outputs.find(output =>
+                        output.name === activeInput.name &&
+                        output.manufacturer === activeInput.manufacturer
+                    )
+                    || outputs.find(output => output.name === activeInput.name);
+
+                if (matchingOutput) {
+                    midiOutSelect.value = matchingOutput.id;
+                    activeOutput = matchingOutput;
+                    log(`Wyjście ustawione automatycznie: ${activeOutput.name}`);
+                } else {
+                    midiOutSelect.value = "";
+                    activeOutput = null;
+                    log(`Brak pasującego wyjścia dla urządzenia: ${activeInput.name}`);
+                }
+            } else {
+                activeOutput = null;
+                midiOutSelect.value = "";
             }
         });
 
@@ -298,14 +329,18 @@
                         } else if (outType === "NOTE") {
                             if (ccValue > 0) {
                                 const noteNumber = parseInt(el(`outNote-${i}`).value);
-                                const isCustomDur = el(`customDurCheck-${i}`).checked;
-                                const duration = isCustomDur
-                                    ? parseInt(el(`outDuration-${i}`).value)
-                                    : parseInt(el('globalDuration').value);
-                                const isCustomVolume = el(`customVolumeCheck-${i}`).checked;
-                                const volumeValue = isCustomVolume
-                                    ? parseInt(el(`outVolume-${i}`).value)
-                                    : parseInt(el('globalVolume').value);
+                                const customDuration = el(`outDuration-${i}`).value.trim();
+                                const globalDuration = parseInt(el('globalDuration').value);
+                                const duration = customDuration === ""
+                                    ? (Number.isFinite(globalDuration) ? globalDuration : 300)
+                                    : parseInt(customDuration);
+                                const safeDuration = Math.max(1, Math.min(10000, Number.isFinite(duration) ? duration : 300));
+
+                                const customVolume = el(`outVolume-${i}`).value.trim();
+                                const globalVolume = parseInt(el('globalVolume').value);
+                                const volumeValue = customVolume === ""
+                                    ? (Number.isFinite(globalVolume) ? globalVolume : 100)
+                                    : parseInt(customVolume);
                                 const baseVelocity = Math.max(0, Math.min(127, Number.isFinite(volumeValue) ? volumeValue : 100));
                                 const velocity = randomizeNoteVelocity(baseVelocity);
 
@@ -315,14 +350,14 @@
                                 }
 
                                 activeOutput.send([0x90 | channel, noteNumber, velocity]);
-                                log(`🎵 NOTE ON: ${noteNumber} (CC: ${ccValue}, Vel: ${velocity}) [Czas: ${duration}ms]`);
+                                log(`🎵 NOTE ON: ${noteNumber} (CC: ${ccValue}, Vel: ${velocity}) [Czas: ${safeDuration}ms]`);
 
                                 setTimeout(() => {
                                     if (activeOutput) {
                                         activeOutput.send([0x80 | channel, noteNumber, 0]);
                                         log(`🔇 NOTE OFF: ${noteNumber}`);
                                     }
-                                }, duration);
+                                }, safeDuration);
                             }
                         }
                         return;
